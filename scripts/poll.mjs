@@ -24,7 +24,21 @@ const DRY = process.env.DRY_RUN === "true";
 
 if (!TOKEN) { console.error("missing GH_DISPATCH_TOKEN"); process.exit(1); }
 
-async function gql(query, variables) {
+async function gql(query, variables, attempt = 1) {
+  try {
+    return await gqlOnce(query, variables);
+  } catch (err) {
+    // GitHub returns transient 5xx and secondary rate limits often enough that
+    // one blip should not turn into a red run and a five minute stall.
+    if (attempt >= 3) throw err;
+    const wait = attempt * 2000;
+    console.error(`  graphql attempt ${attempt} failed (${String(err).slice(0,120)}), retrying in ${wait}ms`);
+    await new Promise(r => setTimeout(r, wait));
+    return gql(query, variables, attempt + 1);
+  }
+}
+
+async function gqlOnce(query, variables) {
   const r = await fetch("https://api.github.com/graphql", {
     method: "POST",
     headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json",
@@ -86,7 +100,9 @@ const due = all.filter(n => {
 console.log(`${due.length} card(s) to start`);
 if (!due.length) process.exit(0);
 
+let started = 0, failed = 0;
 for (const n of due) {
+ try {
   const c = n.content;
   const repo = c.repository.nameWithOwner;
   console.log(`  -> ${repo}#${c.number} ${JSON.stringify(c.title.slice(0, 60))}`);
@@ -111,6 +127,14 @@ for (const n of due) {
       client_payload: { task: { issue_repo: repo, issue_number: c.number, iteration: 1 } },
     }),
   });
-  if (!dr.ok) console.error(`     dispatch failed ${dr.status}: ${await dr.text()}`);
-  else console.log(`     dispatched`);
+  if (!dr.ok) { console.error(`     dispatch failed ${dr.status}: ${await dr.text()}`); failed++; }
+  else { console.log(`     dispatched`); started++; }
+ } catch (err) {
+  // A transient 5xx or secondary rate limit on one card must not kill the run.
+  // The label is only written on success, so the next poll retries this card.
+  failed++;
+  console.error(`     error: ${String(err)}`);
+ }
 }
+console.log(`started=${started} failed=${failed}`);
+if (started === 0 && failed > 0) process.exit(1);
