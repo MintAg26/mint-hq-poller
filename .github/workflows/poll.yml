@@ -1,0 +1,32 @@
+name: poll-board
+
+# Public repo: GitHub Actions minutes are free here, so a 5-minute poll costs
+# nothing. The private mint-hq repo only spends minutes on actual runner work.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List what would start, dispatch nothing"
+        type: boolean
+        default: false
+
+concurrency:
+  group: poll-board
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: node scripts/poll.mjs
+        env:
+          GH_DISPATCH_TOKEN: ${{ secrets.GH_DISPATCH_TOKEN }}
+          BOARD_OWNER: MintAg26
+          BOARD_NUMBER: "2"
+          STATUS_FIELD: Status
+          TRIGGER_STATUSES: In Progress
+          TARGET_REPO: MintAg26/mint-hq
+          DRY_RUN: ${{ inputs.dry_run }}
